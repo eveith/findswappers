@@ -65,6 +65,7 @@ sub read_proc {
     my $swap_overall    = 0;
     
     my $smaps_fh = IO::File->new($dirname . '/smaps', 'r');
+    return undef unless $smaps_fh;
     while (<$smaps_fh>) {
         $swap_overall   += $1 if(/^Swap:\s+(\d+) kB/);
         $mem_overall    += $1 if(/^Size:\s+(\d+) kB/);
@@ -90,6 +91,12 @@ sub read_proc {
 }
 
 
+if (0 != $>) {
+    print $COLOR_YELLOW . "Warning:" . $COLOR_RESET .
+            " You are not root. ".
+            "Only your own processes are displayed.\n";
+}
+
 # Collect all processes that actually swap:
 
 foreach my $dir (</proc/*>) {
@@ -97,6 +104,7 @@ foreach my $dir (</proc/*>) {
     print "Reading " . $COLOR_CYAN . $dir . $COLOR_RESET . "...\r";
     
     my $proc_data = read_proc($dir);
+    next unless $proc_data;
 
     $sum_kb_swapped += $proc_data->{'swap'};
     push(@swappers, $proc_data) if ($proc_data->{'swap'} > 0);
