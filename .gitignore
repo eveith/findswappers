@@ -1,0 +1,5 @@
+Makefile
+.*.sw?
+MYMETA.*
+pm_to_blib
+blib/

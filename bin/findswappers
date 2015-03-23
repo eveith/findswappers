@@ -1,0 +1,155 @@
+#!/usr/bin/env perl
+# findswappers --- A script that identifies swapped processes
+# Copyright (C) 2013  Eric MSP Veith <eveith@gnyu-linux.org>
+#
+# All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or 
+# without modification, are permitted provided that the following 
+# conditions are met:
+#
+# 1. Redistributions of source code must retain the above 
+# copyright notice, this list of conditions and the following disclaimer.
+#
+# 2. Redistributions in binary form must reproduce the above 
+# copyright notice, this list of conditions and the following disclaimer 
+# in the documentation and/or other materials provided with the distribution.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+# ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+# LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+# CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+# SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+# INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+# CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+# ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+# POSSIBILITY OF SUCH DAMAGE.
+
+
+use strict;
+use warnings;
+
+use IO::File;
+use File::Spec;
+use Data::Dumper;
+
+
+# Color codes:
+
+my $COLOR_RESET = "\e[0;37;40m";
+my $COLOR_CYAN  = "\e[1;36;40m";
+my $COLOR_WHITE = "\e[1;37;40m";
+my $COLOR_GREEN = "\e[1;32;40m";
+my $COLOR_YELLOW = "\e[1;33;40m";
+my $COLOR_RED   = "\e[1;31;40m";
+
+
+# Data variables:
+
+my $sum_kb_swapped = 0;
+my $sum_kb_swapspace = 0;
+my @swappers;
+
+
+### Reads all necessary information for a proc dir:
+sub read_proc {
+    my $dirname = shift;
+
+    return undef unless($dirname && -d $dirname && -f "${dirname}/cmdline");
+
+    # First, read swap values.
+
+    my $mem_overall     = 0;
+    my $swap_overall    = 0;
+    
+    my $smaps_fh = IO::File->new($dirname . '/smaps', 'r');
+    while (<$smaps_fh>) {
+        $swap_overall   += $1 if(/^Swap:\s+(\d+) kB/);
+        $mem_overall    += $1 if(/^Size:\s+(\d+) kB/);
+    }
+    $smaps_fh->close;
+
+    # Read statistics/filename:
+
+    my @dirparts = File::Spec->splitdir($dirname);
+    my $pid = $dirparts[-1];
+
+    my $cmdline_fh = IO::File->new($dirname . '/cmdline', 'r');
+    my $cmdline = <$cmdline_fh> if($cmdline_fh);
+    my @argv = split(/\0/, $cmdline) if($cmdline);
+    $cmdline_fh->close;
+
+    return {
+        pid     => $pid,
+        argv    => \@argv,
+        mem     => $mem_overall,
+        swap    => $swap_overall,
+    };
+}
+
+
+# Collect all processes that actually swap:
+
+foreach my $dir (</proc/*>) {
+    next unless(-d $dir && $dir =~ /\d+$/);
+    print "Reading " . $COLOR_CYAN . $dir . $COLOR_RESET . "...\r";
+    
+    my $proc_data = read_proc($dir);
+
+    $sum_kb_swapped += $proc_data->{'swap'};
+    push(@swappers, $proc_data) if ($proc_data->{'swap'} > 0);
+}
+
+# Sort processes by swap:
+
+@swappers = sort({ $b->{'swap'} <=> $a->{'swap'} } @swappers);
+
+# Read total swap space:
+
+{
+    my $swaps_fh = IO::File->new('/proc/swaps', 'r');
+    while (<$swaps_fh>) {
+        my @cols = split(/\s+/);
+        $sum_kb_swapspace += $cols[2] if ($cols[2] =~ /^\d+$/);
+    }
+}
+
+# Print total:
+
+my $number_color = $COLOR_GREEN;
+if ($sum_kb_swapped / $sum_kb_swapspace > 0.9) {
+    $number_color = $COLOR_RED;
+} elsif ($sum_kb_swapped > 0) {
+    $number_color = $COLOR_YELLOW;
+} else {
+    $number_color = $COLOR_GREEN;
+}
+
+printf(
+        $COLOR_RESET . "A total of " .
+            $number_color . "%i kB" . $COLOR_RESET . 
+            ' (' . 
+            $number_color . "%i%%" . $COLOR_RESET .
+            ') ' .
+            "is swapped.\n",
+        $sum_kb_swapped,
+        ($sum_kb_swapped / $sum_kb_swapspace * 100.0));
+
+# Print swappers:
+
+my $number_length = length($sum_kb_swapped);
+foreach my $swapper (@swappers) {
+    my @argv = @{ $swapper->{'argv'} };
+
+    printf(
+            $COLOR_WHITE . "%" . $number_length . "d/%d kB" .
+                $COLOR_RESET . "\tPID %d: " . $COLOR_CYAN . "%s" .
+                $COLOR_RESET . " %s\n",
+            $swapper->{'swap'},
+            $swapper->{'mem'},
+            $swapper->{'pid'},
+            $argv[0],
+            join(' ', @argv[1 .. $#argv]));
+}
